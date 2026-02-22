@@ -11,7 +11,7 @@ assert image.shape[0] == image.shape[1]
 color2 = [255, 128, 0]
 color1 = [0, 128, 255]
 
-for i, _ in enumerate(np.linspace(0, 1, image.shape[0])):
+for i in range(image.shape[0]):
     for j in range(image.shape[1]):
         v = (i+j)/(size*2)
         r = lerp(color1[0], color2[0], v)
