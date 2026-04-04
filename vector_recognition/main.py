@@ -1,65 +1,95 @@
 import matplotlib.pyplot as plt
 import numpy as np
-from skimage.measure import label, regionprops, perimeter
+from skimage.measure import label, regionprops
 from skimage.io import imread
 from pathlib import Path
 
-def classificator(region):
-    holes = count_holes(region)
-    if holes == 2: #B, 8
-        left_col = region.image[:, 0].sum() / region.image.shape[0]
-        if left_col > 0.85:
-            return "B"
-        else:
-            return "8"
-    elif holes == 1: #A, 0
-        img = region.image.astype(float)
-        h = img.shape[0]
-        top_mass = img[:h // 2, :].sum() / img.sum()
-        if top_mass < 0.46:
-            return "A"
-        else:
-            return "0"
-    else: #1, W, X, *, -, /
-        img = region.image.astype(float)
-        h, w = img.shape
-        aspect = np.min(region.image.shape) / np.max(region.image.shape)
-        vlines = (np.sum(region.image, 0) == region.image.shape[0]).sum() / w
-        # hlines = (np.sum(region.image, 1) == region.image.shape[1]).sum() / h
-        fill = img.sum() / (h * w)
-
-        if fill > 0.99:
-            return "-"
-
-        labeled = label(np.logical_not(region.image))
-        bays = sum(1 for r in regionprops(labeled) if r.area > 3)
-        # stars = {15, 17, 27, 30, 39, 41, 42, 68, 73, 76, 85, 91, 100, 102, 134, 164, 165, 169, 174, 185, 188, 189,89}
-        # if region.label in stars:
-        #     print(
-        #         f"label={region.label}, vlines={vlines:.3f}, fill={fill:.3f}, bays={bays}, aspect={aspect:.3f}, h={h}, w={w}")
-
-        if aspect > 0.85 and fill > 0.57 and vlines < 0.2:
-            return "*"
-        if bays >= 5: return "W"
-        if bays == 4: return "X"
-
-        if vlines > 0.2:  return "1"
-        if fill > 0.55:
-            return "*"
-        else:
-            return "/"
-    return "?"
+save_path = Path(__file__).parent
 
 def count_holes(region):
     shape = region.image.shape
-    new_image = np.zeros((shape[0]+2, shape[1]+2))
+    new_image = np.zeros((shape[0] + 2, shape[1] + 2))
     new_image[1:-1, 1:-1] = region.image
     new_image = np.logical_not(new_image)
     labeled = label(new_image)
-
     return np.max(labeled) - 1
 
-save_path = Path(__file__).parent
+def count_bays(region):
+    ch = count_holes(region)
+    shape = region.image.shape
+    padded = np.zeros((shape[0] + 2, shape[1] + 2))
+    padded[1:-1, 1:-1] = region.image
+    inverted = np.logical_not(padded)
+    bays_labeled = label(inverted)
+    x = sum(1 for r in regionprops(bays_labeled) if r.area < 3)
+    return np.max(bays_labeled) - ch - x
+
+def extractor(region):
+    img = region.image.astype(float)
+    h, w = img.shape
+    cy, cx = region.centroid_local
+    cy /= h
+    cx /= w
+    holes = count_holes(region)
+    bays = count_bays(region)
+    vlines = (np.sum(region.image, 0) == h).sum() / w
+    area_ratio = region.area / img.size
+    aspect = h / max(w, 1)
+    eccentricity = region.eccentricity
+    row_fill = np.sum(img, axis=1) / w
+    col_fill = np.sum(img, axis=0) / h
+    h_sym = 1 - np.abs(col_fill - col_fill[::-1]).mean()
+    v_sym = 1 - np.abs(row_fill - row_fill[::-1]).mean()
+    top_fill = img[:h//2, :].mean()
+    bot_fill = img[h//2:, :].mean()
+    left_fill = img[:, :w//2].mean()
+    right_fill = img[:, w//2:].mean()
+    orientation = region.orientation
+    return np.array([area_ratio, cy, cx, holes, bays, vlines, eccentricity, aspect,
+                     h_sym, v_sym, top_fill, bot_fill, left_fill, right_fill, orientation])
+
+def weighted_dist(a, b):
+    diff = a - b
+    weights = np.array([
+        3,   # area_ratio
+        1,   # cy
+        1,   # cx
+        20,  # holes
+        8,   # bays
+        20,  # vlines
+        20,  # eccentricity
+        8,   # aspect
+        20,  # h_sym
+        15,  # v_sym
+        4,   # top_fill
+        4,   # bot_fill
+        3,   # left_fill
+        3,   # right_fill
+        0,   # orientation
+    ])
+    return (weights * diff**2).sum() ** 0.5
+
+
+def classificator(region, templates):
+    features = extractor(region)
+    res = ""
+    min_dist = 10 ** 16
+    for key in templates:
+        current_dist = weighted_dist(templates[key], features)
+        if current_dist < min_dist:
+            min_dist = current_dist
+            res = key
+    return res
+
+template = imread('./alphabet-small.png')[:, :, :-1]
+template = template.sum(2)
+binary = template != 765
+labeled = label(binary)
+props = regionprops(labeled)
+
+templates = {}
+for region, symbol in zip(props, ["8", "0", "A", "B", "1", "W", "X", "*", "/", "-"]):
+    templates[symbol] = extractor(region)
 
 image = imread("./alphabet.png")[:, :, :-1]
 abinary = image.mean(2) > 0
@@ -67,19 +97,16 @@ alabeled = label(abinary)
 aprops = regionprops(alabeled)
 
 res = {}
-
-image_path = save_path / "out_tree"
+image_path = save_path / "out"
 image_path.mkdir(exist_ok=True)
 
-plt.figure(figsize=(5,7))
+plt.figure(figsize=(5, 7))
 for region in aprops:
-    symbol = classificator(region)
-    if symbol not in res:
-        res[symbol] = 0
-    res[symbol] += 1
+    symbol = classificator(region, templates)
+    res[symbol] = res.get(symbol, 0) + 1
     plt.cla()
     plt.title(f"Class - '{symbol}'")
     plt.imshow(region.image)
     plt.savefig(image_path / f"image_{region.label}.png")
-print(res)
-print(f"{1.0 - res.get('?',0) / len(aprops)}")
+
+print("Частотный словарь:", res)
