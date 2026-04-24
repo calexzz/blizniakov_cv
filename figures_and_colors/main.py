@@ -5,18 +5,16 @@ from skimage.measure import label, regionprops
 from skimage.color import rgb2hsv, rgb2gray
 
 def get_color(h):
-    if h < 0.055:
-        return "red"
-    elif h < 0.11:
+    if h < 0.13:
         return "orange"
-    elif h < 0.22:
+    elif h < 0.25:
         return "yellow"
-    elif h < 0.50:
+    elif h < 0.36:
         return "green"
-    elif h < 0.67:
+    elif h < 0.50:
+        return "teal"
+    elif h < 0.72:
         return "blue"
-    elif h < 0.83:
-        return "purple"
     else:
         return "pink"
 
